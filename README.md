@@ -1,5 +1,5 @@
 # LoveZip
-A zip compressing library for LÖVE framework without any native libraries dependencies.
+A zip compressing library for LÖVE framework without any external libraries dependencies.
 
 **LÖVE Forums Topic:** https://love2d.org/forums/viewtopic.php?f=5&t=84549&p=216340
 

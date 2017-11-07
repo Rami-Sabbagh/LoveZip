@@ -1,6 +1,15 @@
 # LoveZip
 A zip compressing library for LÖVE framework without any native libraries dependencies.
 
+**LÖVE Forums Topic:** https://love2d.org/forums/viewtopic.php?f=5&t=84549&p=216340
+
+## Documentation:
+You can find the documentation in LoveZip/init.lua.
+
+Note: the path protection has been removed, so please provide the paths with '/' instead of '\', without any double slashes, and without a slash at the start.
+
+Another note: The library doesn't scan sub-directories, but you can do that manually.
+
 ## Example:
 ```lua
 local zip = require("LoveZip")

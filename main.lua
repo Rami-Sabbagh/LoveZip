@@ -5,6 +5,6 @@ function love.load()
 end
 
 function love.draw()
-  love.graphics.setColor(255,255,255,255)
+  love.graphics.setColor(1,1,1,1)
   love.graphics.print("Done",50,50)
 end

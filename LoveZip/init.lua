@@ -8,7 +8,7 @@ local libpath = ...
 --ZLib functions
 local zlib_crc32 = require(libpath..".CRC32")
 local zlib_compress = function(data)
-  return love.math.compress(data,"zlib"):getString()
+  return love.data.compress("string","zlib",data,9)
 end
 
 local function number_to_bytestring(number, nbytes)
@@ -221,10 +221,10 @@ function zip.zip(zipfile, ...)
 
    local ok, err
    for _, file in pairs({...}) do
-      if love.filesystem.isDirectory(file) then
+      if love.filesystem.getInfo(file).type == "directory" then
          for _, entry in pairs(love.filesystem.getDirectoryItems(file)) do
             local fullname = file.."/"..entry
-            if love.filesystem.isFile(fullname) then
+            if love.filesystem.getInfo(fullname).type == "file" then
                ok, err = zw:add(fullname)
                if not ok then break end
             end

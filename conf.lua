@@ -1,3 +1,5 @@
+io.stdout:setvbuf("no")
+
 function love.conf(t)
     t.identity = "LoveZipExample"               -- The name of the save directory (string)
     t.version = "11.1"                -- The LÖVE version this game was made for (string)

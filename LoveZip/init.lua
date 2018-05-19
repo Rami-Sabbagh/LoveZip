@@ -1,246 +1,358 @@
---- A Lua implementation of .zip file archiving (used originally in luarocks for creating .rock files), it has been ported from luarocks to use in LÖVE framework without any native libraries by Ram Sabbagh (RamiLego4Game).
--- Warning !, the path protection has been removed, so please provide the paths with '/' instead of '\', without any double slashes, and without a slash at the start. 
---Original Source: https://github.com/luarocks/luarocks/blob/master/src/luarocks/tools/zip.lua
-local zip = {}
-
 local libpath = ...
 
---ZLib functions
-local zlib_crc32 = require(libpath..".CRC32")
-local zlib_compress = function(data)
-  return love.data.compress("string","zlib",data,9)
-end
+local crc32 = require(libpath..".CRC32")
+local bit = require("bit")
 
-local function number_to_bytestring(number, nbytes)
-   local out = {}
-   for _ = 1, nbytes do
-      local byte = number % 256
-      table.insert(out, string.char(byte))
-      number = (number - byte) / 256
-   end
-   return table.concat(out)
-end
+local bor,band,lshift,rshift,tohex = bit.bor,bit.band,bit.lshift,bit.rshift,bit.tohex
 
---- Begin a new file to be stored inside the zipfile.
--- @param self handle of the zipfile being written.
--- @param filename filenome of the file to be added to the zipfile.
--- @return true if succeeded, nil in case of failure.
-local function zipwriter_open_new_file_in_zip(self, filename)
-   if self.in_open_file then
-      self:close_file_in_zip()
-      return nil
-   end
-   local lfh = {}
-   self.local_file_header = lfh
-   lfh.last_mod_file_time = 0 -- TODO
-   lfh.last_mod_file_date = 0 -- TODO
-   lfh.file_name_length = #filename
-   lfh.extra_field_length = 0
-   lfh.file_name = filename:gsub("\\", "/")
-   lfh.external_attr = 0 -- TODO properly store permissions
-   self.in_open_file = true
-   return true
-end
+--[[
 
---- Write data to the file currently being stored in the zipfile.
--- @param self handle of the zipfile being written.
--- @param data string containing full contents of the file.
--- @return true if succeeded, nil in case of failure.
-local function zipwriter_write_file_in_zip(self, data)
-   if not self.in_open_file then
-      return nil
-   end
-   local lfh = self.local_file_header
-   local compressed = zlib_compress(data):sub(3, -5)
-   lfh.crc32 = zlib_crc32(data)
-   lfh.compressed_size = #compressed
-   lfh.uncompressed_size = #data
-   self.data = compressed
-   return true
-end
-
---- Complete the writing of a file stored in the zipfile.
--- @param self handle of the zipfile being written.
--- @return true if succeeded, nil in case of failure.
-local function zipwriter_close_file_in_zip(self)
-   local zh = self.ziphandle
-   
-   if not self.in_open_file then
-      return nil
-   end
-
-   -- Local file header
-   local lfh = self.local_file_header
-   lfh.offset = zh:tell()
-   zh:write(number_to_bytestring(0x04034b50, 4)) -- signature
-   zh:write(number_to_bytestring(20, 2)) -- version needed to extract: 2.0
-   zh:write(number_to_bytestring(0, 2)) -- general purpose bit flag
-   zh:write(number_to_bytestring(8, 2)) -- compression method: deflate
-   zh:write(number_to_bytestring(lfh.last_mod_file_time, 2))
-   zh:write(number_to_bytestring(lfh.last_mod_file_date, 2))
-   zh:write(number_to_bytestring(lfh.crc32, 4))
-   zh:write(number_to_bytestring(lfh.compressed_size, 4))
-   zh:write(number_to_bytestring(lfh.uncompressed_size, 4))
-   zh:write(number_to_bytestring(lfh.file_name_length, 2))
-   zh:write(number_to_bytestring(lfh.extra_field_length, 2))
-   zh:write(lfh.file_name)
-
-   -- File data
-   zh:write(self.data)
-   
-   -- Data descriptor
-   zh:write(number_to_bytestring(lfh.crc32, 4))
-   zh:write(number_to_bytestring(lfh.compressed_size, 4))
-   zh:write(number_to_bytestring(lfh.uncompressed_size, 4))
-   
-   table.insert(self.files, lfh)
-   self.in_open_file = false
-   
-   return true
-end
-
--- @return boolean or (boolean, string): true on success,
--- false and an error message on failure.
-local function zipwriter_add(self, file)
-   local fin
-   local ok, err = self:open_new_file_in_zip(file)
-   if not ok then
-      err = "error in opening "..file.." in zipfile"
-   else
-      fin = love.filesystem.newFile(file,"r")
-      if not fin then
-         ok = false
-         err = "error opening "..file.." for reading"
-      end
-   end
-   if ok then
-      local data = fin:read()
-      if not data then
-         err = "error reading "..file
-         ok = false
-      else
-         ok = self:write_file_in_zip(data)
-         if not ok then
-            err = "error in writing "..file.." in the zipfile"
-         end
-      end
-   end
-   if fin then
-      fin:close()
-   end
-   if ok then
-      ok = self:close_file_in_zip()
-      if not ok then
-         err = "error in writing "..file.." in the zipfile"
-      end
-   end
-   return ok == true, err
-end
-
---- Complete the writing of the zipfile.
--- @param self handle of the zipfile being written.
--- @return true if succeeded, nil in case of failure.
-local function zipwriter_close(self)
-   local zh = self.ziphandle
-   
-   local central_directory_offset = zh:tell()
-   
-   local size_of_central_directory = 0
-   -- Central directory structure
-   for _, lfh in ipairs(self.files) do
-      zh:write(number_to_bytestring(0x02014b50, 4)) -- signature
-      zh:write(number_to_bytestring(3, 2)) -- version made by: UNIX
-      zh:write(number_to_bytestring(20, 2)) -- version needed to extract: 2.0
-      zh:write(number_to_bytestring(0, 2)) -- general purpose bit flag
-      zh:write(number_to_bytestring(8, 2)) -- compression method: deflate
-      zh:write(number_to_bytestring(lfh.last_mod_file_time, 2))
-      zh:write(number_to_bytestring(lfh.last_mod_file_date, 2))
-      zh:write(number_to_bytestring(lfh.crc32, 4))
-      zh:write(number_to_bytestring(lfh.compressed_size, 4))
-      zh:write(number_to_bytestring(lfh.uncompressed_size, 4))
-      zh:write(number_to_bytestring(lfh.file_name_length, 2))
-      zh:write(number_to_bytestring(lfh.extra_field_length, 2))
-      zh:write(number_to_bytestring(0, 2)) -- file comment length
-      zh:write(number_to_bytestring(0, 2)) -- disk number start
-      zh:write(number_to_bytestring(0, 2)) -- internal file attributes
-      zh:write(number_to_bytestring(lfh.external_attr, 4)) -- external file attributes
-      zh:write(number_to_bytestring(lfh.offset, 4)) -- relative offset of local header
-      zh:write(lfh.file_name)
-      size_of_central_directory = size_of_central_directory + 46 + lfh.file_name_length
-   end
-   
-   -- End of central directory record
-   zh:write(number_to_bytestring(0x06054b50, 4)) -- signature
-   zh:write(number_to_bytestring(0, 2)) -- number of this disk
-   zh:write(number_to_bytestring(0, 2)) -- number of disk with start of central directory
-   zh:write(number_to_bytestring(#self.files, 2)) -- total number of entries in the central dir on this disk
-   zh:write(number_to_bytestring(#self.files, 2)) -- total number of entries in the central dir
-   zh:write(number_to_bytestring(size_of_central_directory, 4))
-   zh:write(number_to_bytestring(central_directory_offset, 4))
-   zh:write(number_to_bytestring(0, 2)) -- zip file comment length
-   zh:close()
-
-   return true
-end
-
---- Return a zip handle open for writing.
--- @param name filename of the zipfile to be created.
--- @return a zip handle, or nil in case of error.
-function zip.new_zipwriter(name)
-   
-   local zw = {}
+  [local file header 1]
+  [encryption header 1]
+  [file data 1]
+  [data descriptor 1]
+  . 
+  .
+  .
+  [local file header n]
+  [encryption header n]
+  [file data n]
+  [data descriptor n]
+  [archive decryption header] 
+  [archive extra data record] 
+  [central directory header 1]
+  .
+  .
+  .
+  [central directory header n]
+  [zip64 end of central directory record]
+  [zip64 end of central directory locator] 
+  [end of central directory record]
   
-   zw.ziphandle = love.filesystem.newFile(name, "w")
-   if not zw.ziphandle then
-      return nil
-   end
-   zw.files = {}
-   zw.in_open_file = false
-   
-   zw.add = zipwriter_add
-   zw.close = zipwriter_close
-   zw.open_new_file_in_zip = zipwriter_open_new_file_in_zip
-   zw.write_file_in_zip = zipwriter_write_file_in_zip
-   zw.close_file_in_zip = zipwriter_close_file_in_zip
+]]
 
-   return zw
+--== Helper functions ==--
+
+local function newStringFile(data)
+  local str = data or ""
+  
+  local file = {}
+  
+  local pos = 0
+  
+  function file:getSize() return #str end
+  function file:seek(p) pos = p end
+  function file:tell() return pos end
+  function file:read(bytes)
+    if bytes then
+      if pos+bytes > #str then bytes = #str-pos end
+      
+      local substr = str:sub(pos+1,pos+bytes)
+      
+      pos = pos + bytes
+      
+      return substr, bytes
+    else
+      return str
+    end
+  end
+  
+  function file:write(d,s)
+    if s then d = d:sub(1,s) end
+    if pos+#d > #str then d = d:sub(1,#str-pos) end
+    
+    str = str:sub(1,pos)..d..str:sub(pos+#d+1,-1)
+    
+    pos = pos + #d
+    
+    return #d
+  end
+  
+  function file:flush() end
+  function file:close() end
+  
+  return file
 end
 
---- Compress files in a .zip archive.
--- Note: This function doesn't index subdirectories.
--- @param zipfile string: pathname of .zip archive to be created.
--- @param ... Filenames to be stored in the archive are given as
--- additional arguments.
--- @return boolean or (boolean, string): true on success,
--- false and an error message on failure.
-function zip.zip(zipfile, ...)
-   local zw = zip.new_zipwriter(zipfile)
-   if not zw then
-      return nil, "error opening "..zipfile
-   end
-
-   local ok, err
-   for _, file in pairs({...}) do
-      if love.filesystem.getInfo(file).type == "directory" then
-         for _, entry in pairs(love.filesystem.getDirectoryItems(file)) do
-            local fullname = file.."/"..entry
-            if love.filesystem.getInfo(fullname).type == "file" then
-               ok, err = zw:add(fullname)
-               if not ok then break end
-            end
-         end
-      else
-         ok, err = zw:add(file)
-         if not ok then break end
-      end
-   end
-
-   ok = zw:close()
-   if not ok then
-      return false, "error closing "..zipfile
-   end
-   return ok, err
+local function decodeNumber(str,bigEndian)
+  local num = 0
+  
+  if not bigEndian then str = str:reverse() end
+  
+  for char in string.gmatch(str,".") do
+    local byte = string.byte(char)
+    
+    num = lshift(num,8)
+    num = bor(num, byte)
+  end
+  
+  return num
 end
 
+local function encodeNumber(num,len,bigEndian)
+  
+  local chars = {}
+  
+  for i=1,len do
+    chars[i] = string.char(band(num,255))
+    num = rshift(num,8)
+  end
+  
+  chars = table.concat(chars)
+  
+  if bigEndian then chars = chars:reverse() end
+  
+  return chars
+end
 
-return zip
+--== Internal functions ==--
+
+local function writeFile(zipFile,fileName,fileData,modTime,extraField,fileComment,attributes)
+  
+  local fileOffset = zipFile:tell()
+  
+  --[[
+  Local file header:
+
+    local file header signature     4 bytes  (0x04034b50)
+    version needed to extract       2 bytes
+    general purpose bit flag        2 bytes
+    compression method              2 bytes
+    last mod file time              2 bytes
+    last mod file date              2 bytes
+    crc-32                          4 bytes
+    compressed size                 4 bytes
+    uncompressed size               4 bytes
+    file name length                2 bytes
+    extra field length              2 bytes
+
+    file name (variable size)
+    extra field (variable size)
+
+  ]]
+  
+  zipFile:write("\80\75\3\4") --local file header signature - 4 bytes - (0x04034b50)
+  
+  zipFile:write(encodeNumber(20,2)) --version needed to extract - 2 bytes
+  --2.0 - File is compressed using Deflate compression
+  
+  zipFile:write(string.char(1)..string.char(4)) --general purpose bit flag - 2 bytes
+  --[[(For Methods 8 and 9 - Deflating)
+    Bit 2  Bit 1
+      0      0    Normal (-en) compression option was used.
+      0      1    Maximum (-exx/-ex) compression option was used. <----
+      1      0    Fast (-ef) compression option was used.
+      1      1    Super Fast (-es) compression option was used.
+  ]]
+  --[[Bit 11: Language encoding flag (EFS).  If this bit is set,
+    the filename and comment fields for this file
+    MUST be encoded using UTF-8. (see APPENDIX D)]]
+  
+  zipFile:write(encodeNumber(8,2)) --compression method - 2 bytes
+  --8 - The file is Deflated
+  
+  zipFile:write(encodeNumber(0,2)) --last mod file time - 2 bytes
+  --Leave as zero, it doesn't worth calculating.
+  
+  zipFile:write(encodeNumber(0,2)) --last mod file date - 2 bytes
+  --Leave as zero, it doesn't worth calculating.
+  
+  local fileCRC32 = crc32(fileData)
+  
+  zipFile:write(encodeNumber(fileCRC32,4)) --crc-32 - 4 bytes
+  --crc32 of uncompressed file data.
+  
+  local compressedData = love.data.compress("string","deflate",fileData,9)
+  
+  zipFile:write(encodeNumber(#compressedData,4)) --compressed size - 4 bytes
+  
+  zipFile:write(encodeNumber(#fileData,4)) --uncompressed size - 4 bytes
+  
+  zipFile:write(encodeNumber(fileName and #fileName or 0,2)) --file name length - 2 bytes
+  
+  zipFile:write(encodeNumber(extraField and #extraField or 0,2)) --extra field length - 2 bytes
+  
+  zipFile:write(fileName or "") --file name (variable size)
+  
+  zipFile:write(extraField or "") --extra field (variable size)
+  
+  --File data
+  zipFile:write(compressedData)
+  
+  --[[
+  Data descriptor:
+
+    crc-32                          4 bytes
+    compressed size                 4 bytes
+    uncompressed size               4 bytes
+  ]]
+  
+  zipFile:write(encodeNumber(fileCRC32,4)) --crc-32 - 4 bytes
+  --crc32 of uncompressed file data.
+  
+  zipFile:write(encodeNumber(#compressedData,4)) --compressed size - 4 bytes
+  
+  zipFile:write(encodeNumber(#fileData,4)) --uncompressed size - 4 bytes
+  
+  --Return file info, used when writing the centeral directory.
+  return {
+    fileOffset = fileOffset,
+    modTime = modTime or 0,
+    fileCRC32 = fileCRC32,
+    compressedSize = #compressedData,
+    uncompressedSize = #fileData,
+    fileName = fileName or "",
+    extraField = extraField or "",
+    comment = fileComment or "",
+    attributes = attributes or 0
+  }
+end
+
+local function writeCenteralDirectory(zipFile,filesInfos)
+  
+  local centeralDirectorySize = 0
+  local centeralDirectoryOffset = zipFile:tell()
+  
+  --[[
+  Central directory structure:
+
+    central file header signature   4 bytes  (0x02014b50)
+    version made by                 2 bytes
+    version needed to extract       2 bytes
+    general purpose bit flag        2 bytes
+    compression method              2 bytes
+    last mod file time              2 bytes
+    last mod file date              2 bytes
+    crc-32                          4 bytes
+    compressed size                 4 bytes
+    uncompressed size               4 bytes
+    file name length                2 bytes
+    extra field length              2 bytes
+    file comment length             2 bytes
+    disk number start               2 bytes
+    internal file attributes        2 bytes
+    external file attributes        4 bytes
+    relative offset of local header 4 bytes
+
+    file name (variable size)
+    extra field (variable size)
+    file comment (variable size)
+  ]]
+  
+  for fileInfo in pairs(filesInfos) do
+    
+    zipFile:write("\80\75\1\2") --central file header signature - 4 bytes - (0x02014b50)
+    
+    --version made by - 2 bytes
+    zipFile:write(string.char(3)) --3 - UNIX
+    zipFile:write(string.char(63)) --Spec file version: 6.3.4
+    
+    zipFile:write(encodeNumber(20,2)) --version needed to extract - 2 bytes
+    --2.0 - File is compressed using Deflate compression
+    
+    zipFile:write(string.char(1)..string.char(4)) --general purpose bit flag - 2 bytes
+    --[[(For Methods 8 and 9 - Deflating)
+      Bit 2  Bit 1
+        0      0    Normal (-en) compression option was used.
+        0      1    Maximum (-exx/-ex) compression option was used. <----
+        1      0    Fast (-ef) compression option was used.
+        1      1    Super Fast (-es) compression option was used.
+    ]]
+    --[[Bit 11: Language encoding flag (EFS).  If this bit is set,
+      the filename and comment fields for this file
+      MUST be encoded using UTF-8. (see APPENDIX D)]]
+    
+    zipFile:write(encodeNumber(8,2)) --compression method - 2 bytes
+    --8 - The file is Deflated
+    
+    zipFile:write(encodeNumber(0,2)) --last mod file time - 2 bytes
+    --Leave as zero, it doesn't worth calculating.
+    
+    zipFile:write(encodeNumber(0,2)) --last mod file date - 2 bytes
+    --Leave as zero, it doesn't worth calculating.
+    
+    zipFile:write(encodeNumber(fileInfo.fileCRC32,4)) --crc-32 - 4 bytes
+    --crc32 of uncompressed file data.
+    
+    zipFile:write(encodeNumber(fileInfo.compressedSize,4)) --compressed size - 4 bytes
+    
+    zipFile:write(encodeNumber(fileInfo.uncompressedSize,4)) --uncompressed size - 4 bytes
+    
+    zipFile:write(encodeNumber(#fileInfo.fileName,2)) --file name length - 2 bytes
+    
+    zipFile:write(encodeNumber(#fileInfo.extraField,2)) --extra field length - 2 bytes
+    
+    zipFile:write(encodeNumber(#fileInfo.comment,2)) --file comment length - 2 bytes
+    
+    zipFile:write(encodeNumber(0,2)) --disk number start - 2 bytes
+    
+    zipFile:write(encodeNumber(0,2)) --internal file attributes - 2 bytes
+    
+    zipFile:write(encodeNumber(fileInfo.attributes,4)) --external file attributes - 4 bytes
+    
+    zipFile:write(encodeNumber(fileInfo.fileOffset,4)) --relative offset of local header - 4 bytes
+    
+    zipFile:write(fileInfo.fileName) --file name (variable size)
+    
+    zipFile:write(fileInfo.extraField) --extra field (variable size)
+    
+    zipFile:write(fileInfo.comment) --file comment (variable size)
+    
+    centeralDirectorySize = centeralDirectorySize + 46 + #fileInfo.fileName + #fileInfo.extraField + #fileInfo.comment
+    
+  end
+  
+  --Return centeral directory info
+  return {
+    offset = centeralDirectoryOffset,
+    size = centeralDirectorySize,
+    entries = #filesInfos
+  }
+end
+
+local function writeEndOfCenteralDirectory(zipFile,centeralDirectoryInfo,zipComment)
+  --[[
+  End of central directory record:
+  
+    end of central dir signature    4 bytes  (0x06054b50)
+    number of this disk             2 bytes
+    number of the disk with the
+    start of the central directory  2 bytes
+    total number of entries in the
+    central directory on this disk  2 bytes
+    total number of entries in
+    the central directory           2 bytes
+    size of the central directory   4 bytes
+    offset of start of central
+    directory with respect to
+    the starting disk number        4 bytes
+    .ZIP file comment length        2 bytes
+    .ZIP file comment       (variable size)
+  ]]
+  
+  zipFile:write("\80\75\5\6") --end of central dir signature - 4 bytes - (0x06054b50)
+  zipFile:write(encodeNumber(0,2)) --number of this disk - 2 bytes
+  
+  zipFile:write(encodeNumber(0,2)) --number of the disk with the start of the central directory - 2 bytes
+  
+  zipFile:write(encodeNumber(centeralDirectoryInfo.entries,2)) --total number of entries in the central directory on this disk - 2 bytes
+  
+  zipFile:write(encodeNumber(centeralDirectoryInfo.entries,2)) --total number of entries in the central directory - 2 bytes
+  
+  zipFile:write(encodeNumber(centeralDirectoryInfo.size,4)) --size of the central directory - 4 bytes
+  
+  zipFile:write(encodeNumber(centeralDirectoryInfo.offset,4)) --offset of start of central directory with respect to the starting disk number - 4 bytes
+  
+  zipFile:write(encodeNumber(zipComment and #zipComment or 0,2)) --.ZIP file comment length - 2 bytes
+  
+  zipFile:write(zipComment or "") --.ZIP file comment (variable size)
+  
+end
+
+--== User API ==--
+
+local zapi = {}
+
+
+
+return zapi

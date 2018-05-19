@@ -1,7 +1,8 @@
-local zip = require("LoveZip")
+local loveZip = require("love-zip")
 
 function love.load()
-  zip.zip("/Result.zip", "test1.txt", "test2.txt", "test3", "test3/test4")
+  assert(loveZip.writeZip("TestArchive","TestArchive.zip"))
+  love.system.openURL("file://"..love.filesystem.getSaveDirectory())
 end
 
 function love.draw()

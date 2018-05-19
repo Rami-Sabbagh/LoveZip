@@ -353,6 +353,39 @@ end
 
 local zapi = {}
 
+function zapi.newZipWriter(zipFile)
+  
+  local zipFile = zipFile or newStringFile()
+  
+  local filesInfos = {}
+  
+  local zipFinished = false
+  
+  local writer = {}
+  
+  function writer.addFile(fileData,modTime,extraField,fileComment,attributes)
+    if zipFinished then return error("The .ZIP file is finished !") end
+    
+    local fileInfo = writeFile(zipFile,fileData,modTime,extraField,fileComment,attributes)
+    
+    filesInfos[#filesInfos+1] = fileInfo
+  end
+  
+  function writer.finishZip(zipComment)
+    if zipFinished then return error("The .ZIP file is already finished !") end
+    
+    local centeralDirectoryInfo = writeCenteralDirectory(zipFile,filesInfos)
+    writeEndOfCenteralDirectory(zipFile,centeralDirectoryInfo,zipComment)
+    
+    zipFinished = true
+  end
+  
+  return writer
+  
+end
 
+function zapi.createZip(path)
+  
+end
 
 return zapi

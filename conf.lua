@@ -8,8 +8,8 @@ function love.conf(t)
     t.externalstorage = true            -- True to save files (and read from the save directory) in external storage on Android (boolean) 
     t.gammacorrect = false              -- Enable gamma-correct rendering, when supported by the system (boolean)
     
-    t.window.width = 600
-    t.window.height = 450
+    t.window.width = 300
+    t.window.height = 200
     t.window.title = "LoveZipExample"
  
     t.modules.audio = false             -- Disable the audio module (boolean)

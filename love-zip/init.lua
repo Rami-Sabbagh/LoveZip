@@ -58,9 +58,6 @@ local function newStringFile(data)
   end
   
   function file:write(d,s)
-    if s then d = d:sub(1,s) end
-    if pos+#d > #str then d = d:sub(1,#str-pos) end
-    
     str = str:sub(1,pos)..d..str:sub(pos+#d+1,-1)
     
     pos = pos + #d
@@ -408,7 +405,7 @@ function zapi.createZip(path,zipFile)
       writer.addFile(fileName,fileData,modTime)
     elseif dirInfo.type == "directory" then
       for id,item in ipairs(love.filesystem.getDirectoryItems(dir)) do
-        index(string.format("%s/%s",dir,item))
+        index(dir.."/"..item)
       end
     end
   end
@@ -419,7 +416,7 @@ function zapi.createZip(path,zipFile)
   
   local zipData = writer.finishZip()
   
-  if not zipFile then return true, zipData end
+  if not zipFile then return true, zipData:read() end
   
   zipFile:flush()
   zipFile:close()
